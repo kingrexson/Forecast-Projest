@@ -1,4 +1,4 @@
-# Forecast-Projest
+# Forecast-Project
 
 This forecast project is a is taking a look at the existing forecast model and making improvements 
 ## Background
