@@ -1,0 +1,250 @@
+#-------------------------Code description ----------------------------------------------
+#Forecast 
+# Description:  
+#---------------------------Packages----------------------------------------------------
+#Predicted production pred
+#install.packages("tidyverse")
+#install.packages("forecast")
+#install.packages("tseries")
+#install.packages("zoo")
+#install.packages("lubriate")
+#install.packages("ggplot2")
+
+library(tidyverse)
+library(forecast)
+library(tseries)
+library(zoo)
+library(lubridate)
+library(ggplot2)
+#--------------------Created Variables---------------------------------
+Int_FY17<- interval(ymd("2016-10-01"), ymd("2017-09-30"))
+Int_FY18<- interval(ymd("2017-10-01"), ymd("2018-09-30"))
+Int_FY19<- interval(ymd("2018-10-01"), ymd("2019-09-30"))
+Int_FY20<- interval(ymd("2019-10-01"), ymd("2050-09-30"))
+
+#---------------------Import the Data-------------------------------------------
+setwd("C:/Users/1114453915C/Documents/Projects/predicted production")
+TS <- read_csv ("times series test 2.csv")
+TS$`Class End Date` <- as.Date(ifelse(substr(TS$`Class End Date`, 1, 1) %in% c("0":"9"), as.Date(TS$`Class End Date`, format = "%m/%d/%Y"), 
+                                           as.Date(TS$`Class End Date`, format = "%B %d, %Y")), origin = "1970-01-01")
+  
+
+TS$`AFSC Shred` <- ifelse(TS$`AFSC Shred`== "1T231", "1Z131", TS$`AFSC Shred`)
+TS$`AFSC Shred` <- ifelse(TS$`AFSC Shred`== "1C231", "1Z231", TS$`AFSC Shred`)
+TS$`AFSC Shred` <- ifelse(TS$`AFSC Shred`== "1C431", "1Z331", TS$`AFSC Shred`)
+TS$`AFSC Shred` <- ifelse(TS$`AFSC Shred`== "1W032", "1Z431", TS$`AFSC Shred`)
+
+
+# For time series Analysis we need to organize the data so its spend evenly across the time period
+# in this case we need to fit the data into a Fiscal calender year
+# first we need to determine how many course graduate in that year 
+
+TSG_AFSC <- TS%>%filter(`AFSC Shred`== "3D131" )%>% 
+  select(`Current Course`,`Class End Date`,`Original Entry`,
+         Graduate,`Adjusted Program Entries`)
+TSG_AFSC[is.na(TSG_AFSC)] <- 0
+TSG_AFSC$FY2017<-ifelse(TSG_AFSC$`Class End Date` %within% Int_FY17,1,0)
+TSG_AFSC$FY2018<-ifelse(TSG_AFSC$`Class End Date` %within% Int_FY18,1,0)
+TSG_AFSC$FY2019<-ifelse(TSG_AFSC$`Class End Date` %within% Int_FY19,1,0)
+TSG_AFSC$FY2020<-ifelse(TSG_AFSC$`Class End Date` %within% Int_FY20,1,0)
+sum(TSG_AFSC$FY2017) # 44
+sum(TSG_AFSC$FY2018) #41
+sum(TSG_AFSC$FY2019) #43
+sum(TSG_AFSC$FY2020) #36
+# as we can see with the following code the courses for each FY varies 
+# therefore we need to sum up the grads into even intervals
+# In this instance months would be the best way to group them 
+# Note here: we need to make sure that a there is are least one course that occurs in the month
+# otherwise we may need to use quarters instead of months 
+TSG_AFSC_Months <-TSG_AFSC%>% group_by(Yearmon= as.yearmon(`Class End Date`, '%m/%d/%Y'  ))%>% 
+summarise(Graduate=sum(Graduate), Entry=sum(`Original Entry`),Program_Entry=sum(`Adjusted Program Entries`))
+
+# Model 1-----------------------------------------------------------------------------
+
+
+TSG_AFSC_Months1 <-TSG_AFSC_Months%>% select(Graduate)
+# The months span from Fy 2010 to 2020 (11 year in total)
+# For time series you strip the time element and create a new one under the function ts
+# Before running the next code it's important to check the months data sheet to see where
+   # the first date starts 
+TS_1C131 <- ts(data = TSG_AFSC_Months1, 
+        start = c (2009,10), frequency = 12)
+#For the forecast we will be using the ARIMA 
+Model_1C131<-auto.arima(TS_1C131)
+# Now that the model has been determined we will forecast the model 
+Fore_1C131 <-forecast(Model_1C131, h=36)
+plot(Fore_1C131)
+Forecasted_Grads_1C131<- Fore_1C131$mean
+# We should also check the residual of the intial and forecast models 
+checkresiduals(Model_1C131)
+checkresiduals(Fore_1C131)
+# the levels of residuasl is a good indication of the fit of the model. 
+# Good model fits will only have random data left in the residuals
+# However just because the model fit will with past data  doesn't mean it the forecast will be accurate 
+# now we need to test the accuracy of this model 
+# We do this by spliting our known data set into 2 part usually 75/25 or 80/20 
+# However since the goal is three year forecast we are going to try to set aside 36 month
+length(TS_1C131) -36
+TS_1C131_train <- window(TS_1C131, start = c(2009,2), end = c(2018,9 ))
+TS_1C131_test <- window(TS_1C131, start = c(2018,10))
+time(TS_1C131_test)
+
+Model_1C131_test<- auto.arima(TS_1C131_train)
+TS_1C131_train_forecast<- forecast(Model_1C131_test, h=36)
+TS_1C131_train_forecast$mean <-ts(data = TS_1C131_train_forecast$mean, 
+                                  start = c(2018,10), frequency = 12)
+
+# next we compare the overall accuracy using the function accuracy, 
+accuracy(TS_1C131_train_forecast$mean, TS_1C131_test)
+TS_1C131_train_forecast$mean
+TS_1C131_test
+# if the RMSE or MAE is high then forecast just grad will not work and more information is likely needed 
+
+# Okay now it time to plot it out to see how well the model overlaps the true numbers 
+autoplot(TS_1C131_train) +
+  forecast::autolayer(TS_1C131_test, series = 'True number') +
+  forecast::autolayer(TS_1C131_train_forecast$mean, series = 'Forecast') +
+  xlab('year') + ylab('Grads') + 
+  guides(colour = guide_legend(title = 'Test Comparison')) +
+  theme(legend.position = c(0.8, 0.8))
+
+
+#Model 2: the Forecast Entry/Grad Model-------------------------------------------------------------------
+
+
+# Model 2 is a little more complex.
+# Because we saw a lot of residual (or data the model could not explain) we need to bring in more data
+# You can add an external regressor the Arima model 
+# And since we know entries have a direct impact on grads we need to include them
+# We understand that entries are actual program each FY
+# However the program number are the best case scenarino witch is almost never the case
+# this means we also need to Forecast Entries
+# we are going to do forecast them by using the actual entires relationship to program enties 
+TSG_AFSC_Months2 <-TSG_AFSC_Months%>% select(Yearmon,Program_Entry, Entry)
+x1C131_E = ts(TSG_AFSC_Months2$Entry,
+            start = c(2009,10), frequency = 12) 
+y1C131_PE= ts(TSG_AFSC_Months2$Program_Entry,
+              start = c(2009,10), frequency = 12)
+
+
+
+Model2_1C131_pt1= auto.arima(x1C131_E , xreg = y1C131_PE) 
+
+checkresiduals(Model2_1C131_pt1)
+time(Model2_1C131_pt1$fitted)
+# For this model the best way forecast the entries is to enter the Program entries manual 
+# or maybe a code for furture Program numbers or bring in another document
+
+FTS <- read_csv("Adjusted program entries.csv")
+FTS$`Class End Date` <- as.Date(ifelse(substr(FTS$`Class End Date`, 1, 1) %in% c("0":"9"), as.Date(FTS$`Class End Date`, format = "%m/%d/%Y"), 
+                                      as.Date(FTS$`Class End Date`, format = "%B %d, %Y")), origin = "1970-01-01")
+
+FTS_1C131 <- FTS%>%filter(`AFSC Shred`== "1C131")%>% 
+  select(`Current Course`,`Class End Date`,`Original Entry`,
+         Graduate,`Adjusted Program Entries`)
+FTS_1C131_Months <-FTS_1C131%>% group_by(Yearmon= as.yearmon(`Class End Date`, '%m/%d/%Y'  ))%>% 
+  summarise(Program_Entry=sum(`Adjusted Program Entries`))
+FTS_1C131_Months1 <-FTS_1C131_Months%>% select(Program_Entry)
+# The months span from Fy 2010 to 2020 (11 year in total)
+# For time series you strip the time element and create a new one under the function ts
+Program_Entries<- ts(data = FTS_1C131_Months1, 
+               start = c(2021,10), frequency = 12)
+
+#Interesting thing about this model is the lengh of the forecast is defien by the lenght 
+# of xeg, if xeg has 36 input it model for 36 months
+Fore2_1C131_pt1<-forecast(Model2_1C131_pt1, xreg = Program_Entries)
+plot(Fore2_1C131_pt1)
+#Finally we need to exacting the number from the model 
+Fore_Entries_1C131 <-Fore2_1C131_pt1$mean
+time(Fore_Entries_1C131)
+# Now that we have the number we create the model for the Grads
+# However We also need the test how well the Forecast Entry model works first 
+checkresiduals(Fore2_1C131_pt1)
+
+#Just like before we create a training and a test data set
+# But we have to duoble up since we now have two variables
+x1C131_train <- window(x1C131_E, start = c(2009,10), end = c(2017,9))
+x1C131_test <- window(x1C131_E, start = c(2017,10))
+y1C131_train <- window(y1C131_PE, start = c(2009,10), end = c(2017,9))
+y1C131_test= window(y1C131_PE, start = c(2017,10))
+
+TS_1C131_train_forecast2<- forecast(auto.arima(x1C131_train, xreg =  y1C131_train), 
+                                    xreg = y1C131_test)
+TS_1C131_train_forecast2$mean <-ts(data = TS_1C131_train_forecast2$mean, 
+                                  start = c(2017,10), frequency = 12)
+                                  
+
+# next we compare the overall accuracy using the function accuracy,\
+# for this one we only need to use the x-varible for the test 
+accuracy(TS_1C131_train_forecast2, x1C131_test )
+
+# Okay nw it time to plot it out to see how well the model overlaps the true numbers 
+autoplot(x1C131_train) +
+  forecast::autolayer(x1C131_test, series = 'True number') +
+  forecast::autolayer(TS_1C131_train_forecast2$mean, series = 'Forecast') +
+  xlab('year') + ylab('Entries') + 
+  guides(colour = guide_legend(title = 'Test Comparison')) +
+  theme(legend.position = c(0.8, 0.8))
+
+
+#Model 2 Pt 2------------------------------------------
+
+
+ 
+# now that we have the entry we can move on to the Grads
+# the formula should look identical except the Forecast will use the forecast from part 1
+# Onceagain you need to make sure the start date matches the months data set
+TSG_AFSC_Months3 <-TSG_AFSC_Months%>% select(Entry,Graduate)
+x1C131_G = ts(TSG_AFSC_Months3$Graduate,
+       start = c(2009,10), frequency = 12) 
+y1C131_E= ts(TSG_AFSC_Months2$Entry,
+             start = c(2009,10), frequency = 12)
+
+Model2_1C131_pt2 = auto.arima(x1C131_G , xreg = y1C131_E) 
+                 
+checkresiduals(Model2_1C131_pt2)
+# For the Y we are going to use the forecast entries form pt 1 of the model 
+Fore2_1C131_pt2<-forecast(Model2_1C131_pt2, xreg = Fore_Entries_1C131)
+plot(Fore2_1C131_pt2)
+time(Fore2_1C131_pt2$mean)
+
+#Just like before we create a training and a test data set
+# But we have to duoble up since we now have two variables
+x1C131_Gtrain <- window(x1C131_G, start = c(2009,10), end = c(2017,9))
+x1C131_Gtest <- window(x1C131_G, start = c(2017,10))
+y1C131_Etrain <- window(y1C131_E, start = c(2009,10), end = c(2017,9))
+y1C131_Etest <- window(y1C131_E, start = c(2017,10))
+# For this test we are going to see what happens if we use forecast entry just like before
+# we ill be replacing the test with the forecast form part one
+# Forecast is only as good as the input if the program number weren't followed,
+   # Then the numbers will be off
+#rerun with the Etest if the forcast is off 
+TS_1C131_train_forecast3<- forecast(auto.arima(x1C131_Gtrain, xreg =  y1C131_Etrain), 
+                                   #xreg = TS_1C131_train_forecast2$mean)
+                                     xreg = y1C131_Etest)
+TS_1C131_train_forecast3$mean <-ts(data = TS_1C131_train_forecast3$mean, 
+                                   start = c(2017,10), frequency = 12)
+
+accuracy(TS_1C131_train_forecast3, x1C131_Gtest )
+
+# Okay nw it time to plot it out to see how well the model overlaps the true numbers 
+autoplot(x1C131_train) +
+  forecast::autolayer(x1C131_Gtest, series = 'True number') +
+  forecast::autolayer(TS_1C131_train_forecast3$mean, series = 'Forecast') +
+  xlab('year') + ylab('Grads') + 
+  guides(colour = guide_legend(title = 'Test Comparison')) +
+  theme(legend.position = c(0.1, 0.8))
+
+#Output-----------------------------------------------------------
+
+Calender <- c(1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3)
+Forecast_compare<-cbind(Calender,as.numeric(y1C131_test), as.numeric(TS_1C131_train_forecast2$mean),
+                as.numeric (x1C131_test),as.numeric(TS_1C131_train_forecast3$mean),
+                as.numeric (x1C131_Gtest),as.numeric(TS_1C131_train_forecast$mean))
+colnames(Forecast_compare) <- c("Year_Grp", "Prog_Entries", "Forecast_Entries", "Actual_Entries",
+                     "Forecast_Grads", "Actual_Grads", "Model_1")
+Forecast_compare<- as.data.frame(Forecast_compare) 
+Forecast_compare2 <- Forecast_compare%>% group_by(Year_Grp)%>% 
+  summarise(sum(Prog_Entries),sum(Forecast_Entries),sum(Actual_Entries),
+            sum(Forecast_Grads),sum(Actual_Grads),sum(Model_1))
+Forecast_compare2$AFCS <- "1C131"
